@@ -30,7 +30,7 @@ class KeycloakTokenValidator(BearerTokenValidator):
         self.public_keys = self.fetch_public_keys()
 
     def fetch_public_keys(self):
-        response = requests.get(KEYCLOAK_CERTS_URL)
+        response = requests.get(KEYCLOAK_CERTS_URL,verify=False)
         if response.status_code != 200:
             raise Exception('Failed to fetch public keys from Keycloak', response.text)
 

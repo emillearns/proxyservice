@@ -38,7 +38,7 @@ sudo yum install python3 python3-pip -y
 
 Step 3 Download the source code
 ```
-wget -O ProxyService.zip "https://fs2.fastupload.io/5d2a59f9b3f39e09/ProxyServiceFlask.zip?download_token=1192ca48a3dfdeb600515f00430e8dfc9a2a3156c613139495884ad02d223a66"
+
 
 
 unzip ProxyService.zip

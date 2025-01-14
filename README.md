@@ -1,4 +1,4 @@
-Link to documentation with images https://docs.google.com/document/d/1kWv9OmGDV_A9KkfOk6jE8JyUuAquNMl3CSUigPKNNX0/edit
+
 
 Step 0 Prerequisite
 

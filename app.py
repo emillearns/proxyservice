@@ -1,4 +1,4 @@
-from flask import Flask, request, make_response, jsonify
+from flask import Flask, request, make_response, jsonify, send_file
 from authlib.oauth2.rfc6750 import BearerTokenValidator, InvalidTokenError, InsufficientScopeError
 from authlib.oauth2.rfc6749 import OAuth2Token
 from authlib.integrations.requests_client import OAuth2Session
@@ -9,6 +9,8 @@ from authlib.jose import jwt, jwk, JsonWebKey, JoseError
 
 import json
 import requests
+import os
+import time
 
 """--- Steup Flask start ---"""
 
@@ -30,7 +32,7 @@ class KeycloakTokenValidator(BearerTokenValidator):
         self.public_keys = self.fetch_public_keys()
 
     def fetch_public_keys(self):
-        response = requests.get(KEYCLOAK_CERTS_URL,verify=False)
+        response = requests.get(KEYCLOAK_CERTS_URL, verify=False)
         if response.status_code != 200:
             raise Exception('Failed to fetch public keys from Keycloak', response.text)
 
@@ -39,7 +41,6 @@ class KeycloakTokenValidator(BearerTokenValidator):
 
     def authenticate_token(self, token_string):
         try:
-            # Decode and verify the JWT token using the public keys
             claims = jwt.decode(token_string, self.public_keys)
             claims.validate()
             return OAuth2Token(claims)
@@ -94,13 +95,47 @@ def get_token(scope = None):
 
     token = zoho.fetch_access_token(scope=scope)
     TOKEN_CACHE_BY_SCOPE[cache_key] = token
-
     return token
 
 """--- ZoHo OAuth Client end ---"""
 
 
 """--- Rest APIs start ---"""
+
+@app.post('/api/token')
+def get_token_from_keycloak():
+    """Proxy endpoint for Keycloak token requests"""
+    try:
+        # Forward the request to Keycloak
+        keycloak_token_url = f"{KEYCLOAK_AUTH_URL}/protocol/openid-connect/token"
+        
+        # Get data from form or JSON
+        data = {}
+        if request.form:
+            data = request.form.to_dict()
+        else:
+            try:
+                data = request.get_json() or {}
+            except Exception:
+                data = {}
+
+        # Forward the token request to Keycloak
+        response = requests.post(
+            keycloak_token_url,
+            data=data,
+            headers={
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            verify=False  # Since we're using verify=False elsewhere
+        )
+
+        # Return the response from Keycloak
+        return jsonify(response.json()), response.status_code
+    except Exception as e:
+        return jsonify({
+            'error': 'token_error',
+            'error_description': str(e)
+        }), 500
 
 @app.get('/api/v3/requests/<id>')
 @require_keycloak(['tickets.read_only', 'tickets.write'])
@@ -134,16 +169,56 @@ def update_request(id):
     scope = "SDPOnDemand.requests.WRITE"
     return proxy_zoho_api(scope)
 
+@app.post('/api/v3/requests/<id>/_uploads')
+@require_keycloak('tickets.write')
+def upload_request_attachment(id):
+    """Upload one or more attachments to a request"""
+
+    scope = "SDPOnDemand.requests.WRITE"
+    token = get_token(scope)
+    access_token = token['access_token']
+
+    # Base URL for Zoho API
+    base_url = f"https://sdpondemand.manageengine.com/app/itdesk/api/v3/requests/{id}/_uploads"
+
+    headers = {
+        'Authorization': f'Zoho-oauthtoken {access_token}',
+        'Accept': 'application/vnd.manageengine.sdp.v3+json'
+    }
+
+    results = []
+    files_list = request.files.getlist('filename')
+    addtoattachment = request.form.get('addtoattachment', 'true')
+
+    # Loop through all uploaded files and send individually
+    for file_obj in files_list:
+        files = {
+            'filename': (file_obj.filename, file_obj.stream, file_obj.mimetype)
+        }
+        data = {'addtoattachment': addtoattachment}
+
+        resp = requests.post(base_url, headers=headers, files=files, data=data)
+        try:
+            results.append(resp.json())
+        except Exception:
+            results.append({'status_code': resp.status_code, 'response': resp.text})
+
+    # Return combined results
+    return jsonify({
+        'uploaded': results,
+        'count': len(results)
+    }), 200
+
+
+
 def proxy_zoho_api(scope):
     """Proxy the request by using OAuth2 client to request the ZoHo API"""
-
-    print("proxy_zoho_api", request)
 
     token = get_token(scope)
 
     forwardHeaders = ['Content-Type', 'Accept']
     headers = {key: request.headers.get(key) for key in forwardHeaders}
-
+    
     # request to ZoHo API with token
     resp = zoho.request(
                 request.method,
@@ -181,5 +256,3 @@ def handle_exception(e):
     })
     response.content_type = "application/json"
     return response
-
-"""--- Rest APIs end ---"""
